@@ -1,0 +1,787 @@
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  SafeAreaView,
+  StatusBar,
+  useWindowDimensions,
+  RefreshControl,
+  Alert,
+} from 'react-native';
+import { useRouter } from 'expo-router';
+import Icon from 'react-native-vector-icons/FontAwesome6';
+import BottomNav from './components/BottomNav';
+import { useData } from './contexts/DataContext';
+
+export default function DashboardScreen() {
+  const router = useRouter();
+  const { width } = useWindowDimensions();
+  const isSmallScreen = width < 375;
+  const { 
+    stats, 
+    invoices, 
+    quotations, 
+    refreshData,
+    formatCurrency,
+    deleteInvoice,
+    deleteQuotation,
+  } = useData();
+  
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await refreshData();
+    setRefreshing(false);
+  };
+
+  const handleDeleteInvoice = (id: string, invoiceNumber: string) => {
+    Alert.alert(
+      'Delete Invoice',
+      `Are you sure you want to delete invoice ${invoiceNumber}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Delete', 
+          style: 'destructive',
+          onPress: () => deleteInvoice(id)
+        }
+      ]
+    );
+  };
+
+  const handleDeleteQuotation = (id: string, quotationNumber: string) => {
+    Alert.alert(
+      'Delete Quotation',
+      `Are you sure you want to delete quotation ${quotationNumber}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Delete', 
+          style: 'destructive',
+          onPress: () => deleteQuotation(id)
+        }
+      ]
+    );
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'paid':
+      case 'accepted':
+        return { color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)' };
+      case 'pending':
+        return { color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)' };
+      case 'overdue':
+      case 'rejected':
+      case 'cancelled':
+        return { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.1)' };
+      case 'draft':
+        return { color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.1)' };
+      case 'expired':
+        return { color: '#64748b', bg: 'rgba(100, 116, 139, 0.1)' };
+      default:
+        return { color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.1)' };
+    }
+  };
+
+  const formatDate = (date: Date) => {
+    return new Date(date).toLocaleDateString('en-KE', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  };
+
+  const statsData = [
+    { 
+      icon: 'file-invoice-dollar', 
+      color: '#3b82f6', 
+      bgColor: 'rgba(59, 130, 246, 0.1)',
+      number: stats.totalInvoices.toString(), 
+      label: 'Total Invoices',
+    },
+    { 
+      icon: 'quote-right', 
+      color: '#8b5cf6', 
+      bgColor: 'rgba(139, 92, 246, 0.1)',
+      number: stats.activeQuotes.toString(), 
+      label: 'Active Quotes',
+    },
+    { 
+      icon: 'money-bill-wave', 
+      color: '#10b981', 
+      bgColor: 'rgba(16, 185, 129, 0.1)',
+      number: formatCurrency(stats.monthlyRevenue), 
+      label: 'Revenue This Month',
+    },
+    { 
+      icon: 'clock', 
+      color: '#f59e0b', 
+      bgColor: 'rgba(245, 158, 11, 0.1)',
+      number: stats.pendingPayments.toString(), 
+      label: 'Pending Payments',
+    },
+  ];
+
+  const recentInvoices = invoices.slice(0, 3);
+  const recentQuotations = quotations.slice(0, 3);
+
+  const renderHeader = () => (
+    <View style={[styles.header, isSmallScreen && styles.headerSmall]}>
+      <View style={[styles.headerContent, isSmallScreen && styles.headerContentSmall]}>
+        <View style={styles.logo}>
+          <Icon name="file-invoice-dollar" size={isSmallScreen ? 20 : 24} color="#3b82f6" />
+          <Text style={[styles.logoText, isSmallScreen && styles.logoTextSmall]}>InvoicePro</Text>
+        </View>
+        <View style={[styles.headerActions, isSmallScreen && styles.headerActionsSmall]}>
+          <TouchableOpacity 
+            style={[styles.iconButton, isSmallScreen && styles.iconButtonSmall]}
+            onPress={onRefresh}
+          >
+            <Icon name="rotate" size={isSmallScreen ? 16 : 18} color="#f8fafc" />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.iconButton, isSmallScreen && styles.iconButtonSmall]}>
+            <Icon name="bell" size={isSmallScreen ? 16 : 18} color="#f8fafc" />
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.iconButton, isSmallScreen && styles.iconButtonSmall]}
+            onPress={() => router.push('/settings')}
+          >
+            <Icon name="user" size={isSmallScreen ? 16 : 18} color="#f8fafc" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+
+  const renderStats = () => {
+    const columns = width < 768 ? 2 : 4;
+    const itemWidth = (width - 40 - 15) / columns;
+
+    return (
+      <View style={[styles.statsGrid, { gap: isSmallScreen ? 10 : 15 }]}>
+        {statsData.map((stat, index) => (
+          <TouchableOpacity
+            key={index}
+            style={[
+              styles.statCard,
+              { 
+                width: itemWidth,
+                padding: isSmallScreen ? 15 : 20 
+              }
+            ]}
+            activeOpacity={0.9}
+            onPress={() => {
+              if (index === 0) router.push('/invoices');
+              if (index === 1) router.push('/quotations');
+            }}
+          >
+            <View style={[
+              styles.statIcon, 
+              { 
+                backgroundColor: stat.bgColor,
+                width: isSmallScreen ? 40 : 50,
+                height: isSmallScreen ? 40 : 50,
+              }
+            ]}>
+              <Icon name={stat.icon as any} size={isSmallScreen ? 16 : 20} color={stat.color} />
+            </View>
+            <View style={styles.statInfo}>
+              <Text style={[
+                styles.statNumber, 
+                isSmallScreen && styles.statNumberSmall
+              ]}>
+                {stat.number}
+              </Text>
+              <Text style={[
+                styles.statLabel, 
+                isSmallScreen && styles.statLabelSmall
+              ]}>
+                {stat.label}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        ))}
+      </View>
+    );
+  };
+
+  const InvoiceItem = ({ invoice }: { invoice: any }) => {
+    const status = getStatusColor(invoice.status);
+    
+    return (
+      <TouchableOpacity
+        style={styles.invoiceContainer}
+        activeOpacity={0.7}
+        onPress={() => router.push({
+          pathname: '/invoice-detail',
+          params: { id: invoice.id }
+        })}
+      >
+        <View style={styles.invoiceHeader}>
+          <View style={styles.invoiceIdContainer}>
+            <Icon name="file-invoice-dollar" size={16} color="#3b82f6" />
+            <Text style={styles.invoiceId}>{invoice.invoiceNumber}</Text>
+          </View>
+          <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
+            <Text style={[styles.statusText, { color: status.color }]}>
+              {invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
+            </Text>
+          </View>
+        </View>
+        
+        <View style={styles.invoiceBody}>
+          <View style={styles.invoiceRow}>
+            <Icon name="building" size={14} color="#94a3b8" />
+            <Text style={styles.invoiceClient} numberOfLines={1}>
+              {invoice.clientName}
+            </Text>
+          </View>
+          
+          <View style={styles.invoiceDetails}>
+            <View style={styles.invoiceDetail}>
+              <Icon name="calendar" size={12} color="#64748b" />
+              <Text style={styles.invoiceDetailText}>
+                Issued: {formatDate(invoice.issueDate)}
+              </Text>
+            </View>
+            <View style={styles.invoiceDetail}>
+              <Icon name="clock" size={12} color="#64748b" />
+              <Text style={styles.invoiceDetailText}>
+                Due: {formatDate(invoice.dueDate)}
+              </Text>
+            </View>
+          </View>
+          
+          <View style={styles.invoiceAmountRow}>
+            <Text style={styles.invoiceAmountLabel}>Amount:</Text>
+            <Text style={styles.invoiceAmount}>{formatCurrency(invoice.total)}</Text>
+          </View>
+        </View>
+        
+        <View style={styles.invoiceFooter}>
+          <View style={styles.invoiceActions}>
+            <TouchableOpacity 
+              style={styles.invoiceActionButton} 
+              onPress={(e) => { 
+                e.stopPropagation();
+                Alert.alert(
+                  'Actions',
+                  'Select an action',
+                  [
+                    { text: 'View', onPress: () => router.push({ pathname: '/invoice-detail', params: { id: invoice.id } }) },
+                    { text: 'Download PDF', onPress: () => Alert.alert('Info', 'PDF download feature coming soon') },
+                    { text: 'Share', onPress: () => Alert.alert('Info', 'Share feature coming soon') },
+                    { text: 'Edit', onPress: () => Alert.alert('Info', 'Edit feature coming soon') },
+                    { 
+                      text: 'Delete', 
+                      style: 'destructive',
+                      onPress: () => handleDeleteInvoice(invoice.id, invoice.invoiceNumber)
+                    },
+                    { text: 'Cancel', style: 'cancel' }
+                  ]
+                );
+              }}
+            >
+              <Icon name="ellipsis-vertical" size={14} color="#94a3b8" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const QuotationItem = ({ quotation }: { quotation: any }) => {
+    const status = getStatusColor(quotation.status);
+    
+    return (
+      <TouchableOpacity
+        style={[styles.invoiceContainer, { borderLeftColor: '#8b5cf6' }]}
+        activeOpacity={0.7}
+        onPress={() => router.push({
+          pathname: '/quotation-detail',
+          params: { id: quotation.id }
+        })}
+      >
+        <View style={styles.invoiceHeader}>
+          <View style={styles.invoiceIdContainer}>
+            <Icon name="quote-right" size={16} color="#8b5cf6" />
+            <Text style={styles.invoiceId}>{quotation.quotationNumber}</Text>
+          </View>
+          <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
+            <Text style={[styles.statusText, { color: status.color }]}>
+              {quotation.status.charAt(0).toUpperCase() + quotation.status.slice(1)}
+            </Text>
+          </View>
+        </View>
+        
+        <View style={styles.invoiceBody}>
+          <View style={styles.invoiceRow}>
+            <Icon name="building" size={14} color="#94a3b8" />
+            <Text style={styles.invoiceClient} numberOfLines={1}>
+              {quotation.clientName}
+            </Text>
+          </View>
+          
+          <View style={styles.invoiceDetails}>
+            <View style={styles.invoiceDetail}>
+              <Icon name="calendar" size={12} color="#64748b" />
+              <Text style={styles.invoiceDetailText}>
+                Issued: {formatDate(quotation.issueDate)}
+              </Text>
+            </View>
+            <View style={styles.invoiceDetail}>
+              <Icon name="hourglass" size={12} color="#64748b" />
+              <Text style={styles.invoiceDetailText}>
+                Valid until: {formatDate(quotation.validUntil)}
+              </Text>
+            </View>
+          </View>
+          
+          <View style={styles.invoiceAmountRow}>
+            <Text style={styles.invoiceAmountLabel}>Amount:</Text>
+            <Text style={styles.invoiceAmount}>{formatCurrency(quotation.total)}</Text>
+          </View>
+        </View>
+        
+        <View style={styles.invoiceFooter}>
+          <View style={styles.invoiceActions}>
+            <TouchableOpacity 
+              style={styles.invoiceActionButton} 
+              onPress={(e) => { 
+                e.stopPropagation();
+                Alert.alert(
+                  'Actions',
+                  'Select an action',
+                  [
+                    { text: 'View', onPress: () => router.push({ pathname: '/quotation-detail', params: { id: quotation.id } }) },
+                    { text: 'Download PDF', onPress: () => Alert.alert('Info', 'PDF download feature coming soon') },
+                    { text: 'Share', onPress: () => Alert.alert('Info', 'Share feature coming soon') },
+                    { text: 'Edit', onPress: () => Alert.alert('Info', 'Edit feature coming soon') },
+                    { 
+                      text: 'Delete', 
+                      style: 'destructive',
+                      onPress: () => handleDeleteQuotation(quotation.id, quotation.quotationNumber)
+                    },
+                    { text: 'Cancel', style: 'cancel' }
+                  ]
+                );
+              }}
+            >
+              <Icon name="ellipsis-vertical" size={14} color="#94a3b8" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderRecentInvoices = () => (
+    <View style={styles.sectionContainer}>
+      <View style={[styles.cardHeader, isSmallScreen && styles.cardHeaderSmall]}>
+        <Text style={[styles.cardTitle, isSmallScreen && styles.cardTitleSmall]}>Recent Invoices</Text>
+        <TouchableOpacity 
+          style={[styles.viewAllButton, isSmallScreen && styles.viewAllButtonSmall]}
+          onPress={() => router.push('/invoices')}
+        >
+          <Text style={[styles.viewAllText, isSmallScreen && styles.viewAllTextSmall]}>View All</Text>
+          <Icon name="chevron-right" size={12} color="#3b82f6" style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
+      </View>
+      
+      {recentInvoices.length > 0 ? (
+        <View style={styles.invoiceList}>
+          {recentInvoices.map((invoice, index) => (
+            <InvoiceItem key={invoice.id} invoice={invoice} />
+          ))}
+        </View>
+      ) : (
+        <View style={styles.emptyState}>
+          <Icon name="file-invoice" size={40} color="#334155" />
+          <Text style={styles.emptyStateText}>No invoices yet</Text>
+          <Text style={styles.emptyStateSubtext}>Create your first invoice to get started</Text>
+          <TouchableOpacity 
+            style={styles.emptyStateButton}
+            onPress={() => router.push('/create-options')}
+          >
+            <Icon name="plus" size={16} color="#ffffff" />
+            <Text style={styles.emptyStateButtonText}>Create Invoice</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
+  );
+
+  const renderRecentQuotations = () => (
+    <View style={styles.sectionContainer}>
+      <View style={[styles.cardHeader, isSmallScreen && styles.cardHeaderSmall]}>
+        <Text style={[styles.cardTitle, isSmallScreen && styles.cardTitleSmall]}>Recent Quotes</Text>
+        <TouchableOpacity 
+          style={[styles.viewAllButton, isSmallScreen && styles.viewAllButtonSmall]}
+          onPress={() => router.push('/quotations')}
+        >
+          <Text style={[styles.viewAllText, isSmallScreen && styles.viewAllTextSmall]}>View All</Text>
+          <Icon name="chevron-right" size={12} color="#3b82f6" style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
+      </View>
+      
+      {recentQuotations.length > 0 ? (
+        <View style={styles.invoiceList}>
+          {recentQuotations.map((quotation, index) => (
+            <QuotationItem key={quotation.id} quotation={quotation} />
+          ))}
+        </View>
+      ) : (
+        <View style={styles.emptyState}>
+          <Icon name="quote-right" size={40} color="#334155" />
+          <Text style={styles.emptyStateText}>No quotations yet</Text>
+          <Text style={styles.emptyStateSubtext}>Create your first quotation to get started</Text>
+          <TouchableOpacity 
+            style={[styles.emptyStateButton, { backgroundColor: '#8b5cf6' }]}
+            onPress={() => router.push('/create-options')}
+          >
+            <Icon name="plus" size={16} color="#ffffff" />
+            <Text style={styles.emptyStateButtonText}>Create Quotation</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
+  );
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
+      {renderHeader()}
+      <ScrollView 
+        style={styles.mainContent}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: isSmallScreen ? 100 : 120 }
+        ]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#3b82f6"
+            colors={['#3b82f6']}
+          />
+        }
+      >
+        <Text style={[styles.pageTitle, isSmallScreen && styles.pageTitleSmall]}>
+          Dashboard
+        </Text>
+        {renderStats()}
+        {renderRecentInvoices()}
+        {renderRecentQuotations()}
+      </ScrollView>
+      <BottomNav />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#0f172a',
+  },
+  // Header Styles
+  header: {
+    backgroundColor: '#1e293b',
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+  },
+  headerSmall: {
+    paddingVertical: 12,
+  },
+  headerContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  headerContentSmall: {
+    paddingHorizontal: 15,
+  },
+  logo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  logoText: {
+    color: '#f8fafc',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  logoTextSmall: {
+    fontSize: 18,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 15,
+  },
+  headerActionsSmall: {
+    gap: 10,
+  },
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  iconButtonSmall: {
+    width: 32,
+    height: 32,
+  },
+  // Main Content
+  mainContent: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  pageTitle: {
+    color: '#f8fafc',
+    fontSize: 24,
+    fontWeight: '600',
+    marginBottom: 20,
+  },
+  pageTitleSmall: {
+    fontSize: 20,
+    marginBottom: 15,
+  },
+  // Stats Grid
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 25,
+  },
+  statCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  statIcon: {
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statInfo: {
+    flex: 1,
+  },
+  statNumber: {
+    color: '#f8fafc',
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  statNumberSmall: {
+    fontSize: 18,
+  },
+  statLabel: {
+    color: '#94a3b8',
+    fontSize: 13,
+    lineHeight: 16,
+  },
+  statLabelSmall: {
+    fontSize: 12,
+  },
+  // Section Containers
+  sectionContainer: {
+    marginBottom: 25,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  cardHeaderSmall: {
+    marginBottom: 12,
+  },
+  cardTitle: {
+    color: '#f8fafc',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  cardTitleSmall: {
+    fontSize: 16,
+  },
+  viewAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+  },
+  viewAllButtonSmall: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  viewAllText: {
+    color: '#3b82f6',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  viewAllTextSmall: {
+    fontSize: 12,
+  },
+  // Invoice/Quotation Items
+  invoiceList: {
+    gap: 12,
+  },
+  invoiceContainer: {
+    backgroundColor: '#1e293b',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderLeftWidth: 4,
+    borderLeftColor: '#3b82f6',
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  invoiceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  invoiceIdContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  invoiceId: {
+    color: '#f8fafc',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  invoiceBody: {
+    marginBottom: 16,
+  },
+  invoiceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  invoiceClient: {
+    color: '#f8fafc',
+    fontSize: 15,
+    fontWeight: '500',
+    flex: 1,
+  },
+  invoiceDetails: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 12,
+  },
+  invoiceDetail: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  invoiceDetailText: {
+    color: '#64748b',
+    fontSize: 12,
+  },
+  invoiceAmountRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#334155',
+  },
+  invoiceAmountLabel: {
+    color: '#94a3b8',
+    fontSize: 13,
+  },
+  invoiceAmount: {
+    color: '#f8fafc',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  invoiceFooter: {
+    borderTopWidth: 1,
+    borderTopColor: '#334155',
+    paddingTop: 12,
+  },
+  invoiceActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  invoiceActionButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Empty State
+  emptyState: {
+    backgroundColor: '#1e293b',
+    borderRadius: 12,
+    padding: 30,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderStyle: 'dashed',
+  },
+  emptyStateText: {
+    color: '#f8fafc',
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 15,
+    marginBottom: 5,
+  },
+  emptyStateSubtext: {
+    color: '#94a3b8',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  emptyStateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#3b82f6',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  emptyStateButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+});

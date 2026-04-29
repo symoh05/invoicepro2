@@ -1,0 +1,1890 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  SafeAreaView,
+  StatusBar,
+  useWindowDimensions,
+  RefreshControl,
+  Alert,
+  FlatList,
+  ActivityIndicator,
+  Modal,
+  TextInput,
+  Animated,
+} from 'react-native';
+import { useRouter } from 'expo-router';
+import Icon from 'react-native-vector-icons/FontAwesome6';
+import BottomNav from './components/BottomNav';
+import NetInfo from '@react-native-community/netinfo';
+
+// Supabase configuration
+const SUPABASE_URL = 'https://balpwwwsmekiwtznuqnd.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_MXWTSjd8S8no2SgVip5RPw_DNhJsk6e';
+
+type Invoice = {
+  id: string;
+  invoice_number: string;
+  client_name: string;
+  client_email?: string;
+  client_company?: string;
+  issue_date: string;
+  due_date: string;
+  total: number;
+  status: string;
+  created_at: string;
+};
+
+type Quotation = {
+  id: string;
+  quotation_number: string;
+  client_name: string;
+  client_email?: string;
+  client_company?: string;
+  issue_date: string;
+  valid_until: string;
+  total: number;
+  status: string;
+  created_at: string;
+};
+
+type ActionItem = {
+  label: string;
+  icon: string;
+  color: string;
+  action: string;
+};
+
+export default function DashboardScreen() {
+  const router = useRouter();
+  const { width } = useWindowDimensions();
+  const isSmallScreen = width < 375;
+  
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [quotations, setQuotations] = useState<Quotation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showActionsModal, setShowActionsModal] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<{
+    type: 'invoice' | 'quotation';
+    data: Invoice | Quotation;
+  } | null>(null);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+  const [stats, setStats] = useState({
+    totalInvoices: 0,
+    activeQuotes: 0,
+    monthlyRevenue: 0,
+    pendingPayments: 0,
+    totalProducts: 0,
+    totalClients: 0,
+  });
+
+  // Network state
+  const [isConnected, setIsConnected] = useState<boolean>(true);
+  const [showNetworkAlert, setShowNetworkAlert] = useState(false);
+  const [networkAlertType, setNetworkAlertType] = useState<'error' | 'success'>('error');
+  
+  const networkAlertAnim = useRef(new Animated.Value(0)).current;
+
+  // Network status monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const newIsConnected = state.isConnected;
+      
+      if (newIsConnected !== isConnected) {
+        if (!newIsConnected) {
+          // Lost connection
+          showNetworkMessage('error');
+        } else {
+          // Regained connection
+          showNetworkMessage('success');
+          // Auto-refresh after connection is restored
+          setTimeout(() => {
+            fetchData();
+          }, 1500);
+        }
+      }
+      
+      setIsConnected(newIsConnected);
+    });
+
+    return () => unsubscribe();
+  }, [isConnected]);
+
+  // Show/hide network message
+  const showNetworkMessage = (type: 'error' | 'success') => {
+    setShowNetworkAlert(true);
+    setNetworkAlertType(type);
+    
+    Animated.timing(networkAlertAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+    
+    if (type === 'success') {
+      setTimeout(() => {
+        hideNetworkMessage();
+      }, 3000);
+    }
+  };
+
+  const hideNetworkMessage = () => {
+    Animated.timing(networkAlertAnim, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowNetworkAlert(false);
+    });
+  };
+
+  // State for delete confirmation modals
+  const [showDeleteInvoiceModal, setShowDeleteInvoiceModal] = useState(false);
+  const [showDeleteQuotationModal, setShowDeleteQuotationModal] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<{
+    type: 'invoice' | 'quotation';
+    id: string;
+    number: string;
+    clientName: string;
+  } | null>(null);
+
+  // Open delete confirmation modal
+  const openDeleteConfirmation = (type: 'invoice' | 'quotation', id: string, number: string, clientName: string) => {
+    setItemToDelete({ type, id, number, clientName });
+    if (type === 'invoice') {
+      setShowDeleteInvoiceModal(true);
+    } else {
+      setShowDeleteQuotationModal(true);
+    }
+  };
+
+  // Delete functions
+  const deleteInvoice = async (invoiceId: string) => {
+    const invoice = invoices.find(inv => inv.id === invoiceId);
+    if (!invoice) return;
+
+    openDeleteConfirmation('invoice', invoiceId, invoice.invoice_number, invoice.client_name);
+  };
+
+  const deleteQuotation = async (quotationId: string) => {
+    const quotation = quotations.find(quote => quote.id === quotationId);
+    if (!quotation) return;
+
+    openDeleteConfirmation('quotation', quotationId, quotation.quotation_number, quotation.client_name);
+  };
+
+  // Handle confirmed delete
+  const handleConfirmedDelete = async () => {
+    if (!itemToDelete) return;
+
+    try {
+      if (itemToDelete.type === 'invoice') {
+        const response = await fetch(`${SUPABASE_URL}/rest/v1/invoices?id=eq.${itemToDelete.id}`, {
+          method: 'DELETE',
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': `Bearer ${SUPABASE_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          setInvoices(prev => prev.filter(inv => inv.id !== itemToDelete.id));
+          calculateStats();
+          showStyledAlert('Success', 'Invoice deleted successfully.', 'success');
+        } else {
+          throw new Error('Failed to delete invoice');
+        }
+      } else {
+        const response = await fetch(`${SUPABASE_URL}/rest/v1/quotations?id=eq.${itemToDelete.id}`, {
+          method: 'DELETE',
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': `Bearer ${SUPABASE_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          setQuotations(prev => prev.filter(quote => quote.id !== itemToDelete.id));
+          calculateStats();
+          showStyledAlert('Success', 'Quotation deleted successfully.', 'success');
+        } else {
+          throw new Error('Failed to delete quotation');
+        }
+      }
+    } catch (error) {
+      console.error('Delete error:', error);
+      showStyledAlert('Error', 'Failed to delete. Please try again.', 'error');
+    }
+  };
+
+  // Simple styled alert
+  const showStyledAlert = (title: string, message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    Alert.alert(
+      title,
+      message,
+      [{ text: 'OK', onPress: () => {} }],
+      { cancelable: true }
+    );
+  };
+
+  // Fetch all data from Supabase
+  const fetchData = async () => {
+    const networkState = await NetInfo.fetch();
+    if (!networkState.isConnected) {
+      showNetworkMessage('error');
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
+    try {
+      setRefreshing(true);
+      
+      const invoicesResponse = await fetch(`${SUPABASE_URL}/rest/v1/invoices?select=*&order=created_at.desc&limit=50`, {
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const quotationsResponse = await fetch(`${SUPABASE_URL}/rest/v1/quotations?select=*&order=created_at.desc&limit=50`, {
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (invoicesResponse.ok && quotationsResponse.ok) {
+        const invoicesData = await invoicesResponse.json();
+        const quotationsData = await quotationsResponse.json();
+        
+        setInvoices(invoicesData || []);
+        setQuotations(quotationsData || []);
+        
+        // Calculate stats
+        const totalInvoices = invoicesData.length;
+        const pendingPayments = invoicesData.filter((inv: Invoice) => 
+          inv.status === 'pending'
+        ).length;
+        
+        const currentMonth = new Date().getMonth();
+        const currentYear = new Date().getFullYear();
+        const monthlyRevenue = invoicesData
+          .filter((inv: Invoice) => {
+            const invDate = new Date(inv.created_at);
+            return invDate.getMonth() === currentMonth && 
+                   invDate.getFullYear() === currentYear &&
+                   inv.status === 'paid';
+          })
+          .reduce((sum: number, inv: Invoice) => sum + inv.total, 0);
+
+        const activeQuotes = quotationsData.filter((quote: Quotation) => {
+          const validUntil = new Date(quote.valid_until);
+          const today = new Date();
+          return validUntil >= today && quote.status === 'pending';
+        }).length;
+
+        let totalProducts = 0;
+        try {
+          const productsCount = await fetch(`${SUPABASE_URL}/rest/v1/products?select=count`, {
+            headers: {
+              'apikey': SUPABASE_KEY,
+              'Authorization': `Bearer ${SUPABASE_KEY}`,
+              'Prefer': 'count=exact',
+            },
+          });
+          
+          if (productsCount.ok) {
+            const countHeader = productsCount.headers.get('content-range');
+            if (countHeader) {
+              const match = countHeader.match(/\/(\d+)/);
+              if (match) totalProducts = parseInt(match[1]);
+            }
+          }
+        } catch (error) {
+          console.log('No products table or error:', error);
+        }
+
+        const allClients = [
+          ...invoicesData.map((inv: Invoice) => inv.client_name),
+          ...quotationsData.map((quote: Quotation) => quote.client_name)
+        ];
+        const uniqueClients = [...new Set(allClients)].length;
+
+        setStats({
+          totalInvoices,
+          activeQuotes,
+          monthlyRevenue,
+          pendingPayments,
+          totalProducts,
+          totalClients: uniqueClients,
+        });
+      } else {
+        throw new Error(`Server error: ${invoicesResponse.status}`);
+      }
+
+    } catch (error: any) {
+      console.error('Fetch error:', error);
+      
+      if (error.message.includes('Network request failed') || !isConnected) {
+        showNetworkMessage('error');
+      } else {
+        showStyledAlert('Database Error', 'Failed to load data. Please try again.', 'error');
+      }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const onRefresh = async () => {
+    if (!isConnected) {
+      showNetworkMessage('error');
+      setRefreshing(false);
+      return;
+    }
+    await fetchData();
+  };
+
+  const calculateStats = () => {
+    const totalInvoices = invoices.length;
+    const pendingPayments = invoices.filter((inv: Invoice) => 
+      inv.status === 'pending'
+    ).length;
+    
+    const currentMonth = new Date().getMonth();
+    const currentYear = new Date().getFullYear();
+    const monthlyRevenue = invoices
+      .filter((inv: Invoice) => {
+        const invDate = new Date(inv.created_at);
+        return invDate.getMonth() === currentMonth && 
+               invDate.getFullYear() === currentYear &&
+               inv.status === 'paid';
+      })
+      .reduce((sum: number, inv: Invoice) => sum + inv.total, 0);
+
+    const activeQuotes = quotations.filter((quote: Quotation) => {
+      const validUntil = new Date(quote.valid_until);
+      const today = new Date();
+      return validUntil >= today && quote.status === 'pending';
+    }).length;
+
+    const allClients = [
+      ...invoices.map((inv: Invoice) => inv.client_name),
+      ...quotations.map((quote: Quotation) => quote.client_name)
+    ];
+    const uniqueClients = [...new Set(allClients)].length;
+
+    setStats({
+      totalInvoices,
+      activeQuotes,
+      monthlyRevenue,
+      pendingPayments,
+      totalProducts: stats.totalProducts,
+      totalClients: uniqueClients,
+    });
+  };
+
+  const formatCurrency = (amount: number) => {
+    return `KES ${amount.toLocaleString('en-KE', { minimumFractionDigits: 2 })}`;
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'paid':
+      case 'accepted':
+        return { color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)' };
+      case 'pending':
+        return { color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)' };
+      case 'overdue':
+        return { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.1)' };
+      case 'rejected':
+      case 'cancelled':
+        return { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.1)' };
+      case 'draft':
+        return { color: '#8E8E93', bg: 'rgba(142, 142, 147, 0.1)' };
+      case 'expired':
+        return { color: '#64748b', bg: 'rgba(100, 116, 139, 0.1)' };
+      default:
+        return { color: '#8E8E93', bg: 'rgba(142, 142, 147, 0.1)' };
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-KE', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  };
+
+  const getDaysUntilDue = (dueDate: string | Date) => {
+    const now = new Date();
+    const due = new Date(dueDate);
+    const diffTime = due.getTime() - now.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
+
+  const isInvoiceOverdue = (invoice: Invoice) => {
+    if (invoice.status === 'paid') return false;
+    const daysUntilDue = getDaysUntilDue(invoice.due_date);
+    return daysUntilDue < 0;
+  };
+
+  const isQuotationExpired = (quotation: Quotation) => {
+    const validUntil = new Date(quotation.valid_until);
+    const today = new Date();
+    return validUntil < today;
+  };
+
+  const filteredInvoices = invoices.filter(invoice =>
+    invoice.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    invoice.client_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (invoice.client_email && invoice.client_email.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (invoice.client_company && invoice.client_company.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
+  const filteredQuotations = quotations.filter(quotation =>
+    quotation.quotation_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    quotation.client_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (quotation.client_email && quotation.client_email.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (quotation.client_company && quotation.client_company.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
+  const recentInvoices = filteredInvoices.slice(0, 3);
+  const recentQuotations = filteredQuotations.slice(0, 3);
+
+  const statsData = [
+    { 
+      icon: 'file-invoice-dollar', 
+      color: '#C3B1E1', 
+      bgColor: 'rgba(195, 177, 225, 0.1)',
+      number: stats.totalInvoices.toString(), 
+      label: 'Total Invoices',
+      onPress: () => router.push('/invoices')
+    },
+    { 
+      icon: 'quote-right', 
+      color: '#10b981', 
+      bgColor: 'rgba(16, 185, 129, 0.1)',
+      number: stats.activeQuotes.toString(), 
+      label: 'Active Quotes',
+      onPress: () => router.push('/quotations')
+    },
+    { 
+      icon: 'money-bill-wave', 
+      color: '#3b82f6', 
+      bgColor: 'rgba(59, 130, 246, 0.1)',
+      number: formatCurrency(stats.monthlyRevenue), 
+      label: 'Monthly Revenue',
+      onPress: () => router.push('/invoices')
+    },
+    { 
+      icon: 'clock', 
+      color: '#f59e0b', 
+      bgColor: 'rgba(245, 158, 11, 0.1)',
+      number: stats.pendingPayments.toString(), 
+      label: 'Pending Payments',
+      onPress: () => router.push('/invoices?filter=pending')
+    },
+    { 
+      icon: 'box', 
+      color: '#8b5cf6', 
+      bgColor: 'rgba(139, 92, 246, 0.1)',
+      number: stats.totalProducts.toString(), 
+      label: 'Products',
+      onPress: () => router.push('/products')
+    },
+    { 
+      icon: 'users', 
+      color: '#ec4899', 
+      bgColor: 'rgba(236, 72, 153, 0.1)',
+      number: stats.totalClients.toString(), 
+      label: 'Clients',
+      onPress: () => router.push('/clients')
+    },
+  ];
+
+  // Network Alert Component - FIXED with visible X icon
+  const renderNetworkAlert = () => {
+    if (!showNetworkAlert) return null;
+
+    const isError = networkAlertType === 'error';
+    const backgroundColor = isError ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)';
+    const borderColor = isError ? 'rgba(239, 68, 68, 0.3)' : 'rgba(16, 185, 129, 0.3)';
+    const iconColor = isError ? '#ef4444' : '#10b981';
+    const iconName = isError ? 'wifi-slash' : 'wifi';
+    const title = isError ? 'No Network Connection' : 'Connection Restored';
+    const message = isError ? 'Check your internet connection' : 'Syncing with server...';
+
+    return (
+      <Animated.View 
+        style={[
+          styles.networkAlert,
+          {
+            backgroundColor,
+            borderColor,
+            opacity: networkAlertAnim,
+            transform: [{
+              translateY: networkAlertAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [-20, 0]
+              })
+            }]
+          }
+        ]}
+      >
+        <View style={styles.networkAlertContent}>
+          <View style={[styles.networkAlertIcon, { backgroundColor: `${iconColor}20` }]}>
+            <Icon name={iconName} size={16} color={iconColor} />
+          </View>
+          <View style={styles.networkAlertText}>
+            <Text style={[styles.networkAlertTitle, { color: iconColor }]}>
+              {title}
+            </Text>
+            <Text style={styles.networkAlertMessage}>
+              {message}
+            </Text>
+          </View>
+          <TouchableOpacity 
+            onPress={hideNetworkMessage}
+            style={[styles.networkAlertClose, { backgroundColor: `${iconColor}20` }]}
+          >
+            <Icon name="xmark" size={14} color={iconColor} />
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+    );
+  };
+
+  // Styled Delete Confirmation Modal Component
+  const StyledDeleteModal = ({ 
+    visible, 
+    onClose, 
+    type = 'invoice'
+  }: {
+    visible: boolean;
+    onClose: () => void;
+    type?: 'invoice' | 'quotation';
+  }) => {
+    if (!itemToDelete) return null;
+
+    const title = type === 'invoice' ? 'Delete Invoice' : 'Delete Quotation';
+    const itemType = type === 'invoice' ? 'invoice' : 'quotation';
+    const icon = type === 'invoice' ? 'file-invoice' : 'file-contract';
+
+    return (
+      <Modal
+        visible={visible}
+        transparent
+        animationType="fade"
+        onRequestClose={onClose}
+      >
+        <TouchableOpacity 
+          style={styles.deleteModalOverlay}
+          activeOpacity={1}
+          onPress={onClose}
+        >
+          <TouchableOpacity 
+            style={styles.deleteModalContent}
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.deleteModalHeader}>
+              <View style={[styles.deleteModalIcon, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
+                <Icon name="trash" size={28} color="#ef4444" />
+              </View>
+              <Text style={styles.deleteModalTitle}>{title}</Text>
+              <Text style={styles.deleteModalSubtitle}>
+                This action cannot be undone
+              </Text>
+            </View>
+
+            <View style={styles.deleteModalInfo}>
+              <View style={styles.deleteModalItemInfo}>
+                <View style={styles.deleteModalItemIcon}>
+                  <Icon name={icon} size={18} color="#ef4444" />
+                </View>
+                <View style={styles.deleteModalItemDetails}>
+                  <Text style={styles.deleteModalItemNumber}>{itemToDelete.number}</Text>
+                  <Text style={styles.deleteModalClient}>{itemToDelete.clientName}</Text>
+                </View>
+              </View>
+              
+              <View style={styles.deleteModalWarning}>
+                <Icon name="exclamation-triangle" size={16} color="#f59e0b" />
+                <Text style={styles.deleteModalWarningText}>
+                  All data associated with this {itemType} will be permanently removed.
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.deleteModalActions}>
+              <TouchableOpacity
+                style={[styles.deleteModalButton, styles.deleteModalCancelButton]}
+                onPress={onClose}
+              >
+                <Text style={styles.deleteModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.deleteModalButton, styles.deleteModalDeleteButton]}
+                onPress={() => {
+                  handleConfirmedDelete();
+                  onClose();
+                }}
+              >
+                <Icon name="trash" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.deleteModalDeleteText}>
+                  Delete {type === 'invoice' ? 'Invoice' : 'Quotation'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+    );
+  };
+
+  const renderHeader = () => (
+    <View style={[styles.header, isSmallScreen && styles.headerSmall]}>
+      <View style={[styles.headerContent, isSmallScreen && styles.headerContentSmall]}>
+        <View style={styles.logo}>
+          <Icon name="file-invoice-dollar" size={isSmallScreen ? 20 : 24} color="#C3B1E1" />
+          <Text style={[styles.logoText, isSmallScreen && styles.logoTextSmall]}>InvoicePro</Text>
+          {!isConnected && (
+            <View style={styles.offlineBadge}>
+              <Icon name="wifi-slash" size={10} color="#ef4444" />
+              <Text style={styles.offlineBadgeText}>Offline</Text>
+            </View>
+          )}
+        </View>
+        <View style={[styles.headerActions, isSmallScreen && styles.headerActionsSmall]}>
+          <TouchableOpacity 
+            style={[styles.iconButton, isSmallScreen && styles.iconButtonSmall]}
+            onPress={onRefresh}
+            disabled={!isConnected || refreshing}
+          >
+            {refreshing ? (
+              <ActivityIndicator size="small" color="#C3B1E1" />
+            ) : (
+              <Icon name="rotate" size={isSmallScreen ? 16 : 18} color={isConnected ? "#C3B1E1" : "#8E8E93"} />
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.iconButton, isSmallScreen && styles.iconButtonSmall]}
+            onPress={() => router.push('/products')}
+          >
+            <Icon name="box" size={isSmallScreen ? 16 : 18} color="#C3B1E1" />
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.iconButton, isSmallScreen && styles.iconButtonSmall]}
+            onPress={() => router.push('/create-options')}
+          >
+            <Icon name="plus" size={isSmallScreen ? 16 : 18} color="#C3B1E1" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+
+  const renderSearchBar = () => (
+    <View style={[styles.searchContainer, isSmallScreen && styles.searchContainerSmall]}>
+      <View style={styles.searchInputContainer}>
+        <Icon name="search" size={16} color="#8E8E93" style={styles.searchIcon} />
+        <TextInput
+          style={[styles.searchInput, isSmallScreen && styles.searchInputSmall]}
+          placeholder="Search invoices & quotes..."
+          placeholderTextColor="#8E8E93"
+          value={searchQuery}
+          onChangeText={(text) => {
+            setSearchQuery(text);
+            setShowSearchResults(text.length > 0);
+          }}
+          clearButtonMode="while-editing"
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => {
+            setSearchQuery('');
+            setShowSearchResults(false);
+          }}>
+            <Icon name="times" size={16} color="#8E8E93" />
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+
+  const renderStats = () => (
+    <View style={[styles.statsGrid, { gap: isSmallScreen ? 10 : 12 }]}>
+      {statsData.map((stat, index) => (
+        <View key={index} style={{ width: '48%' }}>
+          <TouchableOpacity
+            style={styles.statCard}
+            activeOpacity={0.7}
+            onPress={stat.onPress}
+          >
+            <View style={[styles.statIcon, { backgroundColor: stat.bgColor }]}>
+              <Icon name={stat.icon as any} size={isSmallScreen ? 16 : 18} color={stat.color} />
+            </View>
+            <View style={styles.statInfo}>
+              <Text style={[styles.statNumber, isSmallScreen && styles.statNumberSmall]}>
+                {stat.number}
+              </Text>
+              <Text style={[styles.statLabel, isSmallScreen && styles.statLabelSmall]}>
+                {stat.label}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+
+  const InvoiceItem = ({ invoice }: { invoice: Invoice }) => {
+    const status = getStatusColor(invoice.status);
+    const daysUntilDue = getDaysUntilDue(invoice.due_date);
+    const isOverdue = isInvoiceOverdue(invoice);
+    const actualStatus = isOverdue ? 'overdue' : invoice.status;
+    const statusColor = getStatusColor(actualStatus);
+
+    return (
+      <TouchableOpacity
+        style={styles.quotationCard}
+        activeOpacity={0.7}
+        onPress={() => router.push({ pathname: '/invoice-detail', params: { id: invoice.id } })}
+      >
+        <View style={styles.quotationCardHeader}>
+          <View style={styles.quotationHeaderLeft}>
+            <View style={[styles.statusBadge, { backgroundColor: statusColor.bg }]}>
+              <Text style={[styles.statusText, { color: statusColor.color }]}>
+                {actualStatus.charAt(0).toUpperCase() + actualStatus.slice(1)}
+              </Text>
+            </View>
+            
+            {isOverdue && (
+              <View style={styles.overdueBadge}>
+                <Icon name="exclamation-circle" size={10} color="#ef4444" />
+                <Text style={styles.overdueText}>{Math.abs(daysUntilDue)} days overdue</Text>
+              </View>
+            )}
+          </View>
+          <TouchableOpacity 
+            style={styles.moreButton}
+            onPress={(e) => {
+              e.stopPropagation();
+              setSelectedItem({ type: 'invoice', data: invoice });
+              setShowActionsModal(true);
+            }}
+          >
+            <Icon name="ellipsis-vertical" size={16} color="#8E8E93" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.quotationCardBody}>
+          <View style={styles.quotationInfoRow}>
+            <Icon name="hashtag" size={12} color="#8E8E93" />
+            <Text style={styles.quotationNumber}>{invoice.invoice_number}</Text>
+          </View>
+
+          <View style={styles.clientRow}>
+            <Icon name="building" size={14} color="#C3B1E1" />
+            <Text style={styles.clientName} numberOfLines={1}>{invoice.client_name}</Text>
+          </View>
+
+          <View style={styles.quotationDetailsGrid}>
+            <View style={styles.detailItem}>
+              <Icon name="calendar" size={12} color="#8E8E93" />
+              <Text style={styles.detailLabel}>Issued:</Text>
+              <Text style={styles.detailValue}>{formatDate(invoice.issue_date)}</Text>
+            </View>
+            <View style={styles.detailItem}>
+              <Icon name="clock" size={12} color="#8E8E93" />
+              <Text style={styles.detailLabel}>Due:</Text>
+              <Text style={[styles.detailValue, isOverdue && styles.overdueDate]}>
+                {formatDate(invoice.due_date)}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.amountRow}>
+            <Text style={styles.amountLabel}>Total Amount</Text>
+            <Text style={styles.amount}>{formatCurrency(invoice.total)}</Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const QuotationItem = ({ quotation }: { quotation: Quotation }) => {
+    const status = getStatusColor(quotation.status);
+    const daysUntilExpiry = getDaysUntilDue(quotation.valid_until);
+    const isExpired = isQuotationExpired(quotation);
+
+    return (
+      <TouchableOpacity
+        style={styles.quotationCard}
+        activeOpacity={0.7}
+        onPress={() => router.push({ pathname: '/quotation-detail', params: { id: quotation.id } })}
+      >
+        <View style={styles.quotationCardHeader}>
+          <View style={styles.quotationHeaderLeft}>
+            <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
+              <Text style={[styles.statusText, { color: status.color }]}>
+                {quotation.status.charAt(0).toUpperCase() + quotation.status.slice(1)}
+              </Text>
+            </View>
+            
+            {!isExpired && daysUntilExpiry <= 3 && (
+              <View style={styles.expiringBadge}>
+                <Icon name="hourglass" size={10} color="#f59e0b" />
+                <Text style={styles.expiringText}>
+                  {daysUntilExpiry === 0 ? 'Expires today' : `${daysUntilExpiry}d left`}
+                </Text>
+              </View>
+            )}
+            
+            {isExpired && (
+              <View style={styles.expiredBadge}>
+                <Icon name="hourglass-end" size={10} color="#8E8E93" />
+                <Text style={styles.expiredText}>Expired</Text>
+              </View>
+            )}
+          </View>
+          <TouchableOpacity 
+            style={styles.moreButton}
+            onPress={(e) => {
+              e.stopPropagation();
+              setSelectedItem({ type: 'quotation', data: quotation });
+              setShowActionsModal(true);
+            }}
+          >
+            <Icon name="ellipsis-vertical" size={16} color="#8E8E93" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.quotationCardBody}>
+          <View style={styles.quotationInfoRow}>
+            <Icon name="hashtag" size={12} color="#8E8E93" />
+            <Text style={styles.quotationNumber}>{quotation.quotation_number}</Text>
+          </View>
+
+          <View style={styles.clientRow}>
+            <Icon name="building" size={14} color="#10b981" />
+            <Text style={styles.clientName} numberOfLines={1}>{quotation.client_name}</Text>
+          </View>
+
+          <View style={styles.quotationDetailsGrid}>
+            <View style={styles.detailItem}>
+              <Icon name="calendar" size={12} color="#8E8E93" />
+              <Text style={styles.detailLabel}>Issued:</Text>
+              <Text style={styles.detailValue}>{formatDate(quotation.issue_date)}</Text>
+            </View>
+            <View style={styles.detailItem}>
+              <Icon name="hourglass" size={12} color="#8E8E93" />
+              <Text style={styles.detailLabel}>Valid until:</Text>
+              <Text style={[styles.detailValue, isExpired && styles.expiredDate]}>
+                {formatDate(quotation.valid_until)}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.amountRow}>
+            <Text style={styles.amountLabel}>Total Amount</Text>
+            <Text style={styles.amount}>{formatCurrency(quotation.total)}</Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderRecentInvoices = () => (
+    <View style={styles.sectionContainer}>
+      <View style={[styles.sectionHeader, isSmallScreen && styles.sectionHeaderSmall]}>
+        <Text style={[styles.sectionTitle, isSmallScreen && styles.sectionTitleSmall]}>
+          Recent Invoices
+        </Text>
+        <TouchableOpacity 
+          style={[styles.viewAllButton, isSmallScreen && styles.viewAllButtonSmall]}
+          onPress={() => router.push('/invoices')}
+        >
+          <Text style={styles.viewAllText}>View More</Text>
+          <Icon name="arrow-right" size={14} color="#C3B1E1" style={{ marginLeft: 6 }} />
+        </TouchableOpacity>
+      </View>
+      
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#C3B1E1" />
+          <Text style={styles.loadingText}>Loading invoices...</Text>
+        </View>
+      ) : recentInvoices.length > 0 ? (
+        <FlatList
+          data={recentInvoices}
+          renderItem={({ item }) => <InvoiceItem invoice={item} />}
+          keyExtractor={(item) => item.id}
+          scrollEnabled={false}
+          contentContainerStyle={styles.quotationsList}
+        />
+      ) : (
+        <View style={styles.emptyState}>
+          <Icon name="file-invoice" size={50} color="#8E8E93" />
+          <Text style={styles.emptyStateTitle}>
+            {searchQuery ? 'No matching invoices' : 'No Invoices Yet'}
+          </Text>
+          <Text style={styles.emptyStateText}>
+            {searchQuery ? 'Try a different search term' : 'Start by creating your first invoice'}
+          </Text>
+          {!searchQuery && (
+            <TouchableOpacity 
+              style={styles.emptyStateButton}
+              onPress={() => router.push('/create-invoice')}
+            >
+              <Icon name="plus" size={16} color="#000000" />
+              <Text style={styles.emptyStateButtonText}>Create Invoice</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+    </View>
+  );
+
+  const renderRecentQuotations = () => (
+    <View style={styles.sectionContainer}>
+      <View style={[styles.sectionHeader, isSmallScreen && styles.sectionHeaderSmall]}>
+        <Text style={[styles.sectionTitle, isSmallScreen && styles.sectionTitleSmall]}>
+          Recent Quotes
+        </Text>
+        <TouchableOpacity 
+          style={[styles.viewAllButton, isSmallScreen && styles.viewAllButtonSmall]}
+          onPress={() => router.push('/quotations')}
+        >
+          <Text style={[styles.viewAllText, { color: '#10b981' }]}>View More</Text>
+          <Icon name="arrow-right" size={14} color="#10b981" style={{ marginLeft: 6 }} />
+        </TouchableOpacity>
+      </View>
+      
+      {loading ? (
+        <View style={[styles.loadingContainer, { borderColor: 'rgba(16, 185, 129, 0.3)' }]}>
+          <ActivityIndicator size="large" color="#10b981" />
+          <Text style={[styles.loadingText, { color: '#10b981' }]}>Loading quotes...</Text>
+        </View>
+      ) : recentQuotations.length > 0 ? (
+        <FlatList
+          data={recentQuotations}
+          renderItem={({ item }) => <QuotationItem quotation={item} />}
+          keyExtractor={(item) => item.id}
+          scrollEnabled={false}
+          contentContainerStyle={styles.quotationsList}
+        />
+      ) : (
+        <View style={[styles.emptyState, { borderColor: 'rgba(16, 185, 129, 0.3)' }]}>
+          <Icon name="quote-right" size={50} color="#8E8E93" />
+          <Text style={styles.emptyStateTitle}>
+            {searchQuery ? 'No matching quotes' : 'No Quotes Yet'}
+          </Text>
+          <Text style={styles.emptyStateText}>
+            {searchQuery ? 'Try a different search term' : 'Start by creating your first quotation'}
+          </Text>
+          {!searchQuery && (
+            <TouchableOpacity 
+              style={[styles.emptyStateButton, { backgroundColor: '#10b981' }]}
+              onPress={() => router.push('/create-quotation')}
+            >
+              <Icon name="plus" size={16} color="#000000" />
+              <Text style={styles.emptyStateButtonText}>Create Quote</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+    </View>
+  );
+
+  // Updated Actions Modal
+  const renderActionsModal = () => (
+    <Modal
+      visible={showActionsModal}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setShowActionsModal(false)}
+    >
+      <TouchableOpacity 
+        style={styles.modalOverlay}
+        activeOpacity={1}
+        onPress={() => setShowActionsModal(false)}
+      >
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>
+              {selectedItem ? `${selectedItem.type === 'invoice' ? 'Invoice' : 'Quotation'} Actions` : 'Actions'}
+            </Text>
+            <TouchableOpacity onPress={() => setShowActionsModal(false)}>
+              <Icon name="xmark" size={20} color="#8E8E93" />
+            </TouchableOpacity>
+          </View>
+          
+          {selectedItem && (
+            <View style={styles.modalInfo}>
+              <Text style={styles.modalItemNumber}>
+                {selectedItem.type === 'invoice' 
+                  ? (selectedItem.data as Invoice).invoice_number
+                  : (selectedItem.data as Quotation).quotation_number}
+              </Text>
+              <Text style={styles.modalClient}>
+                {(selectedItem.data as Invoice | Quotation).client_name}
+              </Text>
+              <Text style={styles.modalAmount}>
+                {formatCurrency((selectedItem.data as Invoice | Quotation).total)}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.modalActions}>
+            <TouchableOpacity
+              style={styles.modalActionButton}
+              onPress={() => {
+                setShowActionsModal(false);
+                if (selectedItem && selectedItem.type === 'invoice') {
+                  router.push({ pathname: '/invoice-detail', params: { id: selectedItem.data.id } });
+                } else if (selectedItem && selectedItem.type === 'quotation') {
+                  router.push({ pathname: '/quotation-detail', params: { id: selectedItem.data.id } });
+                }
+              }}
+            >
+              <Icon name="eye" size={18} color="#C3B1E1" />
+              <Text style={styles.modalActionText}>View Details</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.modalActionButton}
+              onPress={() => {
+                setShowActionsModal(false);
+                showStyledAlert('Coming Soon', 'Share feature will be available in the next update.', 'info');
+              }}
+            >
+              <Icon name="share" size={18} color="#C3B1E1" />
+              <Text style={styles.modalActionText}>Share</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.modalActionButton}
+              onPress={() => {
+                setShowActionsModal(false);
+                showStyledAlert('Coming Soon', 'Edit feature will be available in the next update.', 'info');
+              }}
+            >
+              <Icon name="pen-to-square" size={18} color="#C3B1E1" />
+              <Text style={styles.modalActionText}>Edit</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.modalActionButton}
+              onPress={() => {
+                setShowActionsModal(false);
+                showStyledAlert('Coming Soon', 'Download PDF feature will be available in the next update.', 'info');
+              }}
+            >
+              <Icon name="download" size={18} color="#C3B1E1" />
+              <Text style={styles.modalActionText}>Download PDF</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.modalActionButton}
+              onPress={() => {
+                setShowActionsModal(false);
+                showStyledAlert('Coming Soon', 'Duplicate feature will be available in the next update.', 'info');
+              }}
+            >
+              <Icon name="copy" size={18} color="#C3B1E1" />
+              <Text style={styles.modalActionText}>Duplicate</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.modalActionButton, styles.deleteActionButton]}
+              onPress={() => {
+                setShowActionsModal(false);
+                if (selectedItem) {
+                  if (selectedItem.type === 'invoice') {
+                    deleteInvoice(selectedItem.data.id);
+                  } else {
+                    deleteQuotation(selectedItem.data.id);
+                  }
+                }
+              }}
+            >
+              <Icon name="trash" size={18} color="#ef4444" />
+              <Text style={[styles.modalActionText, styles.deleteActionText]}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+  if (loading && !refreshing) {
+    return (
+      <SafeAreaView style={[styles.container, styles.centered]}>
+        <StatusBar barStyle="light-content" backgroundColor="#000000" />
+        <ActivityIndicator size="large" color="#C3B1E1" />
+        <Text style={styles.fullLoadingText}>Loading dashboard...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      
+      {/* Network Alert */}
+      {renderNetworkAlert()}
+      
+      {/* Header */}
+      {renderHeader()}
+      
+      <View style={styles.mainContent}>
+        {renderSearchBar()}
+        
+        {showSearchResults ? (
+          <ScrollView 
+            style={styles.searchResultsScrollView}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.searchResultsScrollContent}
+          >
+            {/* Search results component */}
+          </ScrollView>
+        ) : (
+          <ScrollView 
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor="#C3B1E1"
+                colors={['#C3B1E1']}
+              />
+            }
+          >
+            <View style={styles.welcomeSection}>
+              <Text style={[styles.welcomeText, isSmallScreen && styles.welcomeTextSmall]}>
+                Welcome back!
+              </Text>
+              <Text style={[styles.subtitle, isSmallScreen && styles.subtitleSmall]}>
+                {isConnected ? "Here's your business overview" : "No network connection"}
+              </Text>
+            </View>
+
+            {renderStats()}
+            {renderRecentInvoices()}
+            {renderRecentQuotations()}
+          </ScrollView>
+        )}
+      </View>
+      
+      <BottomNav />
+      {renderActionsModal()}
+
+      {/* Styled Delete Confirmation Modals */}
+      <StyledDeleteModal
+        visible={showDeleteInvoiceModal}
+        onClose={() => setShowDeleteInvoiceModal(false)}
+        type="invoice"
+      />
+
+      <StyledDeleteModal
+        visible={showDeleteQuotationModal}
+        onClose={() => setShowDeleteQuotationModal(false)}
+        type="quotation"
+      />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullLoadingText: {
+    color: '#C3B1E1',
+    fontSize: 16,
+    marginTop: 20,
+  },
+  
+  // Network Alert Styles
+  networkAlert: {
+    marginHorizontal: 20,
+    marginTop: 12,
+    marginBottom: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  networkAlertContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  networkAlertIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  networkAlertText: {
+    flex: 1,
+  },
+  networkAlertTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  networkAlertMessage: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  networkAlertClose: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  
+  // Delete Modal Styles
+  deleteModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  deleteModalContent: {
+    backgroundColor: '#15171C',
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 400,
+    borderWidth: 1,
+    borderColor: '#24262B',
+    overflow: 'hidden',
+  },
+  deleteModalHeader: {
+    alignItems: 'center',
+    padding: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: '#24262B',
+  },
+  deleteModalIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  deleteModalTitle: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  deleteModalSubtitle: {
+    color: '#8E8E93',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  deleteModalInfo: {
+    padding: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: '#24262B',
+  },
+  deleteModalItemInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(36, 38, 43, 0.5)',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  deleteModalItemIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  deleteModalItemDetails: {
+    flex: 1,
+  },
+  deleteModalItemNumber: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  deleteModalClient: {
+    color: '#8E8E93',
+    fontSize: 14,
+  },
+  deleteModalWarning: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderRadius: 8,
+    padding: 12,
+    gap: 8,
+  },
+  deleteModalWarningText: {
+    color: '#f59e0b',
+    fontSize: 13,
+    lineHeight: 18,
+    flex: 1,
+  },
+  deleteModalActions: {
+    flexDirection: 'row',
+    padding: 20,
+    gap: 12,
+  },
+  deleteModalButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteModalCancelButton: {
+    backgroundColor: 'rgba(36, 38, 43, 0.5)',
+    borderWidth: 1,
+    borderColor: '#24262B',
+  },
+  deleteModalDeleteButton: {
+    backgroundColor: '#ef4444',
+    flexDirection: 'row',
+  },
+  deleteModalCancelText: {
+    color: '#8E8E93',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  deleteModalDeleteText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  
+  // Offline Badge
+  offlineBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginLeft: 8,
+    gap: 4,
+  },
+  offlineBadgeText: {
+    color: '#ef4444',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  
+  // Header Styles
+  header: {
+    backgroundColor: '#000000',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#24262B',
+  },
+  headerSmall: {
+    paddingVertical: 10,
+  },
+  headerContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  headerContentSmall: {
+    paddingHorizontal: 15,
+  },
+  logo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  logoText: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  logoTextSmall: {
+    fontSize: 20,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  headerActionsSmall: {
+    gap: 10,
+  },
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: 'rgba(195, 177, 225, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  iconButtonSmall: {
+    width: 32,
+    height: 32,
+  },
+  // Search Bar
+  searchContainer: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#000000',
+  },
+  searchContainerSmall: {
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+  },
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#15171C',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#24262B',
+    paddingHorizontal: 12,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    paddingVertical: 12,
+  },
+  searchInputSmall: {
+    fontSize: 13,
+    paddingVertical: 10,
+  },
+  // Main Content
+  mainContent: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 120,
+  },
+  welcomeSection: {
+    marginBottom: 24,
+    paddingHorizontal: 20,
+  },
+  welcomeText: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  welcomeTextSmall: {
+    fontSize: 24,
+  },
+  subtitle: {
+    color: '#8E8E93',
+    fontSize: 16,
+  },
+  subtitleSmall: {
+    fontSize: 14,
+  },
+  // Stats Grid
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 30,
+    paddingHorizontal: 20,
+    justifyContent: 'space-between',
+  },
+  statCard: {
+    backgroundColor: '#15171C',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#24262B',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 18,
+    marginBottom: 12,
+  },
+  statIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statInfo: {
+    flex: 1,
+  },
+  statNumber: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  statNumberSmall: {
+    fontSize: 18,
+  },
+  statLabel: {
+    color: '#8E8E93',
+    fontSize: 13,
+  },
+  statLabelSmall: {
+    fontSize: 12,
+  },
+  // Section Containers
+  sectionContainer: {
+    marginBottom: 30,
+    paddingHorizontal: 20,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sectionHeaderSmall: {
+    marginBottom: 14,
+  },
+  sectionTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '600',
+  },
+  sectionTitleSmall: {
+    fontSize: 18,
+  },
+  viewAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  viewAllButtonSmall: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  viewAllText: {
+    color: '#C3B1E1',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  // Loading
+  loadingContainer: {
+    backgroundColor: '#15171C',
+    borderRadius: 14,
+    padding: 40,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#24262B',
+  },
+  loadingText: {
+    color: '#C3B1E1',
+    fontSize: 14,
+    marginTop: 12,
+  },
+  // Quotation Card
+  quotationsList: {
+    gap: 12,
+  },
+  quotationCard: {
+    backgroundColor: '#15171C',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#24262B',
+    padding: 16,
+  },
+  quotationCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  quotationHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  expiringBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderRadius: 8,
+  },
+  expiringText: {
+    color: '#f59e0b',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  expiredBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(142, 142, 147, 0.1)',
+    borderRadius: 8,
+  },
+  expiredText: {
+    color: '#8E8E93',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  overdueBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderRadius: 8,
+  },
+  overdueText: {
+    color: '#ef4444',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  moreButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: 'rgba(36, 38, 43, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quotationCardBody: {
+    gap: 12,
+  },
+  quotationInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  quotationNumber: {
+    color: '#C3B1E1',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  clientRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  clientName: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '500',
+    flex: 1,
+  },
+  quotationDetailsGrid: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  detailItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  detailLabel: {
+    color: '#8E8E93',
+    fontSize: 12,
+  },
+  detailValue: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  expiredDate: {
+    color: '#8E8E93',
+    textDecorationLine: 'line-through',
+  },
+  overdueDate: {
+    color: '#ef4444',
+  },
+  amountRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#24262B',
+  },
+  amountLabel: {
+    color: '#8E8E93',
+    fontSize: 14,
+  },
+  amount: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  // Empty State
+  emptyState: {
+    backgroundColor: '#15171C',
+    borderRadius: 14,
+    padding: 40,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#24262B',
+    borderStyle: 'dashed',
+  },
+  emptyStateTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '600',
+    marginTop: 20,
+    marginBottom: 8,
+  },
+  emptyStateText: {
+    color: '#8E8E93',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 20,
+  },
+  emptyStateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#C3B1E1',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  emptyStateButtonText: {
+    color: '#000000',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  // Search Results
+  searchResultsScrollView: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  searchResultsScrollContent: {
+    paddingBottom: 100,
+  },
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#15171C',
+    borderRadius: 16,
+    width: '85%',
+    maxWidth: 400,
+    borderWidth: 1,
+    borderColor: '#24262B',
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#24262B',
+  },
+  modalTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  modalInfo: {
+    padding: 20,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#24262B',
+    gap: 8,
+  },
+  modalItemNumber: {
+    color: '#C3B1E1',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  modalClient: {
+    color: '#FFFFFF',
+    fontSize: 14,
+  },
+  modalAmount: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalActions: {
+    padding: 16,
+  },
+  modalActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(36, 38, 43, 0.5)',
+  },
+  deleteActionButton: {
+    borderBottomWidth: 0,
+    marginTop: 4,
+  },
+  modalActionText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+  },
+  deleteActionText: {
+    color: '#ef4444',
+  },
+});

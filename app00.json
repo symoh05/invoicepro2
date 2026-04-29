@@ -1,17 +1,15 @@
 {
   "expo": {
-    "name": "InvoicePro",
-    "slug": "invoicepro",
-    "version": "1.0.1",
+    "name": "invoicepro2",
+    "slug": "invoicepro2",
+    "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "invoicepro",
+    "scheme": "invoicepro2",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.yourcompany.invoicepro",
-      "buildNumber": "1.0.1"
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
@@ -21,19 +19,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
-      "package": "com.yourcompany.invoicepro",
-      "versionCode": 2,
-      "permissions": [
-        "android.permission.INTERNET",
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
-        "android.permission.ACCESS_MEDIA_LOCATION",
-        "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_MEDIA_VIDEO",
-        "android.permission.READ_MEDIA_AUDIO"
-      ]
+      "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
@@ -66,13 +52,6 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    },
-    "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "5ddc77df-dfa1-474c-966b-79228b95f2b1"
-      }
-    },
-    "owner": "simon7209"
+    }
   }
 }
